@@ -8,7 +8,7 @@ No more `git stash`, no more branch juggling, no more lost terminal history.
 
 ### From releases (recommended)
 
-Download the latest binary from [releases](https://github.com/AiDevs-witshe/witshe/releases), extract and move to your PATH:
+Download the latest binary from [releases](https://github.com/mitshe/witshe/releases), extract and move to your PATH:
 
 ```bash
 tar xzf witshe-*.tar.gz
@@ -18,7 +18,7 @@ sudo mv witshe /usr/local/bin/
 ### From source
 
 ```bash
-cargo install --git https://github.com/AiDevs-witshe/witshe
+cargo install --git https://github.com/mitshe/witshe
 ```
 
 Requires: `tmux`, `git`, `cargo`
