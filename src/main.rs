@@ -76,7 +76,7 @@ fn main() {
             if cli.r#continue {
                 continue_last(&store);
             } else {
-                interactive(&store);
+                interactive(&mut store);
             }
             return;
         }
@@ -239,40 +239,41 @@ fn do_switch(session_name: &str) {
     }
 }
 
-fn interactive(store: &Threads) {
+fn interactive(store: &mut Threads) {
     let threads = store.list();
     let alive = tmux::list_sessions();
 
-    let active: Vec<_> = threads.iter()
-        .filter(|t| matches!(t.status, ThreadStatus::Active))
-        .collect();
-
-    if active.is_empty() {
+    if threads.is_empty() {
         println!("\n  no threads. create one: witshe new <name>\n");
         return;
     }
 
-    let items: Vec<picker::PickerItem> = active.iter().map(|t| {
+    let items: Vec<picker::PickerItem> = threads.iter().map(|t| {
         let session = format!("witshe/{}", t.name);
         let is_alive = alive.contains(&session);
-        let icon = if is_alive { "●" } else { "✗" };
+        let is_done = matches!(t.status, ThreadStatus::Done);
+        let icon = if is_done { "✓" } else if is_alive { "●" } else { "✗" };
 
         picker::PickerItem {
             label: format!("{} {}", icon, t.name),
             hint: t.tag.as_ref().map(|tg| format!("[{}]", tg)).unwrap_or_default(),
             desc: t.desc.clone(),
+            is_done,
         }
     }).collect();
 
-    let done_count = threads.iter().filter(|t| matches!(t.status, ThreadStatus::Done)).count();
-    let footer = if done_count > 0 {
-        Some(format!("+ {} done (witshe ls --all)", done_count))
-    } else {
-        None
-    };
-
-    if let Some(idx) = picker::pick("witshe", &items, footer.as_deref()) {
-        do_switch(&format!("witshe/{}", active[idx].name));
+    if let Some(result) = picker::pick("witshe", &items) {
+        let thread = threads[result.index].clone();
+        if result.is_done {
+            store.reopen(&thread.name);
+            let session = format!("witshe/{}", thread.name);
+            let _ = tmux::create_session(&session, &thread.worktree_path);
+            store.save();
+            println!("  reopened: {}", thread.name);
+            do_switch(&session);
+        } else {
+            do_switch(&format!("witshe/{}", thread.name));
+        }
     }
 }
 
