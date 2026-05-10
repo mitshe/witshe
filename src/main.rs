@@ -386,16 +386,18 @@ fn main() {
 
             if claude {
                 let prompt = format!(
-                    "Here's my current witshe threads overview. Tell me: which threads look done? Any issues? What should I focus on next?\n\n{}",
+                    "Here's my current witshe threads overview. Tell me briefly: which threads look done? Any issues? What should I focus on next?\n\n{}",
                     summary
                 );
                 println!("\n  sending to claude...\n");
-                let status = std::process::Command::new("claude")
-                    .args(["-p", &prompt])
-                    .status();
+                let mut child = std::process::Command::new("claude")
+                    .args(["--print", &prompt])
+                    .stdin(std::process::Stdio::null())
+                    .spawn();
 
-                if let Err(e) = status {
-                    eprintln!("error running claude: {}", e);
+                match child {
+                    Ok(ref mut c) => { let _ = c.wait(); }
+                    Err(e) => eprintln!("error running claude: {}", e),
                 }
             }
         }
