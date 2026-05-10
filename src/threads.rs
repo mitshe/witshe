@@ -89,10 +89,13 @@ impl Threads {
         }
     }
 
-    pub fn clear_done(&mut self) -> usize {
-        let before = self.threads.len();
-        self.threads.retain(|t| !matches!(t.status, ThreadStatus::Done));
-        before - self.threads.len()
+    pub fn reopen(&mut self, name: &str) -> bool {
+        if let Some(t) = self.threads.iter_mut().find(|t| t.name == name) {
+            t.status = ThreadStatus::Active;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn rename(&mut self, name: &str, new_name: &str) -> bool {

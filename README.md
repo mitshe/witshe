@@ -12,45 +12,38 @@ cargo install --path .
 
 Requires: `tmux`, `git`
 
-## Quick start
+## Usage
 
 ```bash
-witshe thread feat/login                          # create thread
-witshe thread feat/api --tag epik --desc "REST"   # with metadata
-witshe 1                                          # switch by number
-witshe switch feat/login                          # switch by name
+witshe                                            # interactive picker
+witshe -c                                         # jump to last session
+witshe new feat/login                             # create thread
+witshe new feat/api --tag epik --desc "REST API"  # with metadata
 witshe done                                       # mark current as done
+witshe reopen feat/login                          # bring back a done thread
+witshe set --tag bugfix                           # edit current thread
+witshe set --name new-name --thread old-name      # rename
+witshe ls                                         # list (non-interactive)
+witshe ls --all                                   # include done
+witshe rm feat/old                                # delete permanently
+witshe rm --done                                  # delete all done
 ```
 
-## Dashboard
+## Picker
 
 ```
 $ witshe
 
-witshe — tmux + git worktrees
+  witshe
 
-  ●  1) feat/login [code-review]
-        review PR #42
-  ●  2) feat/api [epik]
-  ✗  3) fix/bug-123
+  > ● feat/login [code-review]
+      review PR #42
+    ● feat/api [epik]
+    ✗ fix/bug-123
 
   + 1 done (witshe ls --all)
+
+  ↑↓ select  enter switch  q quit
 ```
 
 `●` alive `✗` dead `✓` done
-
-## Commands
-
-| Command | What it does |
-|---------|-------------|
-| `witshe` | Dashboard |
-| `witshe <N>` | Quick switch by number |
-| `witshe thread <name>` | Create thread (worktree + tmux) |
-| `witshe switch <name>` | Switch by name |
-| `witshe --resume` | Pick from list |
-| `witshe --continue` | Jump to last session |
-| `witshe done` | Mark done, kill session |
-| `witshe name/tag/desc <val>` | Edit current thread |
-| `witshe ls --all` | Include done threads |
-| `witshe rm <name>` | Delete permanently |
-| `witshe clear` | Remove all done |

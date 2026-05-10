@@ -1,3 +1,4 @@
+mod picker;
 mod threads;
 mod tmux;
 
@@ -10,23 +11,15 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Pick thread interactively
-    #[arg(long)]
-    resume: bool,
-
     /// Jump to last active session
-    #[arg(long, alias = "c")]
+    #[arg(short = 'c', long = "continue")]
     r#continue: bool,
-
-    /// Quick switch by number
-    #[arg(value_name = "N")]
-    number: Option<usize>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new thread (worktree + tmux session)
-    Thread {
+    New {
         name: String,
         #[arg(short, long)]
         repo: Option<String>,
@@ -37,41 +30,40 @@ enum Commands {
         #[arg(short, long)]
         desc: Option<String>,
     },
-    /// List all threads
+    /// List threads (non-interactive)
     Ls {
         #[arg(short, long)]
         all: bool,
     },
-    /// Switch to a thread
-    Switch { name: String },
-    /// Mark thread as done (auto-detects current thread)
-    Done { name: Option<String> },
+    /// Mark thread as done
+    Done {
+        name: Option<String>,
+    },
+    /// Reopen a done thread
+    Reopen {
+        name: String,
+    },
+    /// Edit thread metadata
+    Set {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long)]
+        desc: Option<String>,
+        /// Which thread to edit (auto-detects if inside witshe session)
+        #[arg(short, long)]
+        thread: Option<String>,
+    },
     /// Remove thread permanently
     Rm {
-        name: String,
+        name: Option<String>,
         #[arg(long)]
         keep_worktree: bool,
+        /// Remove all done threads
+        #[arg(long)]
+        done: bool,
     },
-    /// Rename current (or specified) thread
-    Name {
-        new_name: String,
-        #[arg(short, long)]
-        thread: Option<String>,
-    },
-    /// Set/change tag
-    Tag {
-        value: String,
-        #[arg(short, long)]
-        thread: Option<String>,
-    },
-    /// Set/change description
-    Desc {
-        value: String,
-        #[arg(short, long)]
-        thread: Option<String>,
-    },
-    /// Clear all done threads from history
-    Clear,
 }
 
 fn main() {
@@ -83,10 +75,6 @@ fn main() {
         None => {
             if cli.r#continue {
                 continue_last(&store);
-            } else if cli.resume {
-                resume_interactive(&store);
-            } else if let Some(n) = cli.number {
-                quick_switch(&store, n);
             } else {
                 interactive(&store);
             }
@@ -95,7 +83,7 @@ fn main() {
     };
 
     match command {
-        Commands::Thread { name, repo, no_worktree, tag, desc } => {
+        Commands::New { name, repo, no_worktree, tag, desc } => {
             let repo_path = repo.unwrap_or_else(|| {
                 std::env::current_dir().unwrap().to_string_lossy().to_string()
             });
@@ -104,12 +92,9 @@ fn main() {
                 repo_path.clone()
             } else {
                 match tmux::create_worktree(&repo_path, &name) {
-                    Ok(path) => {
-                        println!("  worktree: {}", path);
-                        path
-                    }
+                    Ok(path) => path,
                     Err(e) => {
-                        eprintln!("error creating worktree: {}", e);
+                        eprintln!("error: {}", e);
                         std::process::exit(1);
                     }
                 }
@@ -117,49 +102,22 @@ fn main() {
 
             let session_name = format!("witshe/{}", name);
             if let Err(e) = tmux::create_session(&session_name, &worktree_path) {
-                eprintln!("error creating tmux session: {}", e);
+                eprintln!("error: {}", e);
                 std::process::exit(1);
             }
 
-            let thread = threads::Thread::new(name.clone(), repo_path, worktree_path, !no_worktree, tag, desc);
+            let thread = threads::Thread::new(
+                name.clone(), repo_path, worktree_path, !no_worktree, tag, desc,
+            );
             store.add(thread);
             store.save();
 
-            println!("  thread: {}", name);
-            println!("  switch: witshe switch {}", name);
+            println!("  created: {}", name);
         }
 
         Commands::Ls { all } => {
-            let threads = store.list();
-            if threads.is_empty() {
-                println!("no threads. create one: witshe thread <name>");
-                return;
-            }
-
-            let alive = tmux::list_sessions();
-
-            for t in threads {
-                if !all && matches!(t.status, ThreadStatus::Done) {
-                    continue;
-                }
-                let session = format!("witshe/{}", t.name);
-                let is_alive = alive.contains(&session);
-
-                let icon = match (&t.status, is_alive) {
-                    (ThreadStatus::Done, _) => "✓",
-                    (_, true) => "●",
-                    (_, false) => "✗",
-                };
-
-                let tag_str = t.tag.as_ref().map(|tg| format!(" \x1b[36m[{}]\x1b[0m", tg)).unwrap_or_default();
-                println!("  {} {}{}", icon, t.name, tag_str);
-                if let Some(ref desc) = t.desc {
-                    println!("    {}", desc);
-                }
-            }
+            print_threads(&store, all);
         }
-
-        Commands::Switch { name } => do_switch(&format!("witshe/{}", name)),
 
         Commands::Done { name } => {
             let name = resolve_thread(name);
@@ -174,59 +132,88 @@ fn main() {
             }
         }
 
-        Commands::Name { new_name, thread } => {
-            let name = resolve_thread(thread);
-            let _ = tmux::rename_session(&format!("witshe/{}", name), &format!("witshe/{}", new_name));
-
-            if store.rename(&name, &new_name) {
-                store.save();
-                println!("  renamed: {} -> {}", name, new_name);
-            } else {
-                eprintln!("thread not found: {}", name);
-                std::process::exit(1);
-            }
-        }
-
-        Commands::Tag { value, thread } => {
-            let name = resolve_thread(thread);
-            if store.set_tag(&name, &value) {
-                store.save();
-                println!("  tag: {} -> [{}]", name, value);
-            } else {
-                eprintln!("thread not found: {}", name);
-                std::process::exit(1);
-            }
-        }
-
-        Commands::Desc { value, thread } => {
-            let name = resolve_thread(thread);
-            if store.set_desc(&name, &value) {
-                store.save();
-                println!("  desc: {} -> {}", name, value);
-            } else {
-                eprintln!("thread not found: {}", name);
-                std::process::exit(1);
-            }
-        }
-
-        Commands::Clear => {
-            let count = store.clear_done();
-            store.save();
-            println!("  cleared {} done thread(s)", count);
-        }
-
-        Commands::Rm { name, keep_worktree } => {
-            let _ = tmux::kill_session(&format!("witshe/{}", name));
-
-            if let Some(thread) = store.get(&name) {
-                if thread.has_worktree && !keep_worktree {
-                    let _ = tmux::remove_worktree(&thread.repo_path, &thread.worktree_path);
+        Commands::Reopen { name } => {
+            if store.reopen(&name) {
+                // Re-create tmux session if thread has worktree
+                if let Some(t) = store.get(&name) {
+                    let session_name = format!("witshe/{}", name);
+                    let _ = tmux::create_session(&session_name, &t.worktree_path);
                 }
+                store.save();
+                println!("  reopened: {}", name);
+            } else {
+                eprintln!("thread not found: {}", name);
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Set { name, tag, desc, thread } => {
+            let target = resolve_thread(thread);
+
+            if name.is_none() && tag.is_none() && desc.is_none() {
+                eprintln!("nothing to set. use --name, --tag, or --desc");
+                std::process::exit(1);
             }
 
-            store.remove(&name);
+            if let Some(new_name) = name {
+                let _ = tmux::rename_session(
+                    &format!("witshe/{}", target),
+                    &format!("witshe/{}", new_name),
+                );
+                store.rename(&target, &new_name);
+                println!("  name: {} -> {}", target, new_name);
+            }
+
+            let target_name = store.get(&target).map(|t| t.name.clone())
+                .unwrap_or(target.clone());
+
+            if let Some(tag_val) = tag {
+                store.set_tag(&target_name, &tag_val);
+                println!("  tag: [{}]", tag_val);
+            }
+
+            if let Some(desc_val) = desc {
+                store.set_desc(&target_name, &desc_val);
+                println!("  desc: {}", desc_val);
+            }
+
             store.save();
-            println!("  removed: {}", name);
+        }
+
+        Commands::Rm { name, keep_worktree, done } => {
+            if done {
+                let done_threads: Vec<_> = store.list().iter()
+                    .filter(|t| matches!(t.status, ThreadStatus::Done))
+                    .cloned()
+                    .collect();
+
+                let count = done_threads.len();
+                for t in &done_threads {
+                    if t.has_worktree && !keep_worktree {
+                        let _ = tmux::remove_worktree(&t.repo_path, &t.worktree_path);
+                    }
+                    store.remove(&t.name);
+                }
+                store.save();
+                println!("  removed {} done thread(s)", count);
+            } else {
+                let name = name.unwrap_or_else(|| {
+                    eprintln!("usage: witshe rm <name> or witshe rm --done");
+                    std::process::exit(1);
+                });
+
+                let _ = tmux::kill_session(&format!("witshe/{}", name));
+
+                if let Some(thread) = store.get(&name) {
+                    if thread.has_worktree && !keep_worktree {
+                        let _ = tmux::remove_worktree(&thread.repo_path, &thread.worktree_path);
+                    }
+                }
+
+                store.remove(&name);
+                store.save();
+                println!("  removed: {}", name);
+            }
         }
     }
 }
@@ -256,44 +243,69 @@ fn interactive(store: &Threads) {
     let threads = store.list();
     let alive = tmux::list_sessions();
 
-    println!("\x1b[1mwitshe\x1b[0m — tmux + git worktrees\n");
+    let active: Vec<_> = threads.iter()
+        .filter(|t| matches!(t.status, ThreadStatus::Active))
+        .collect();
 
-    if threads.is_empty() {
-        println!("  no threads yet\n");
-        println!("  witshe thread <name>    create one");
+    if active.is_empty() {
+        println!("\n  no threads. create one: witshe new <name>\n");
         return;
     }
 
-    let active: Vec<_> = threads.iter().filter(|t| matches!(t.status, ThreadStatus::Active)).collect();
-    let done_count = threads.iter().filter(|t| matches!(t.status, ThreadStatus::Done)).count();
-
-    for (i, t) in active.iter().enumerate() {
+    let items: Vec<picker::PickerItem> = active.iter().map(|t| {
         let session = format!("witshe/{}", t.name);
-        let icon = if alive.contains(&session) { "\x1b[32m●\x1b[0m" } else { "\x1b[90m✗\x1b[0m" };
-        let tag_str = t.tag.as_ref().map(|tg| format!(" \x1b[36m[{}]\x1b[0m", tg)).unwrap_or_default();
-        println!("  {}  {}) {}{}", icon, i + 1, t.name, tag_str);
-        if let Some(ref desc) = t.desc {
-            println!("        {}", desc);
-        }
-    }
+        let is_alive = alive.contains(&session);
+        let icon = if is_alive { "●" } else { "✗" };
 
-    if done_count > 0 {
-        println!("\n  \x1b[90m+ {} done (witshe ls --all)\x1b[0m", done_count);
+        picker::PickerItem {
+            label: format!("{} {}", icon, t.name),
+            hint: t.tag.as_ref().map(|tg| format!("[{}]", tg)).unwrap_or_default(),
+            desc: t.desc.clone(),
+        }
+    }).collect();
+
+    let done_count = threads.iter().filter(|t| matches!(t.status, ThreadStatus::Done)).count();
+    let footer = if done_count > 0 {
+        Some(format!("+ {} done (witshe ls --all)", done_count))
+    } else {
+        None
+    };
+
+    if let Some(idx) = picker::pick("witshe", &items, footer.as_deref()) {
+        do_switch(&format!("witshe/{}", active[idx].name));
     }
 }
 
-fn quick_switch(store: &Threads, n: usize) {
-    let active: Vec<_> = store.list().iter()
-        .filter(|t| matches!(t.status, ThreadStatus::Active))
-        .cloned()
-        .collect();
-
-    if n == 0 || n > active.len() {
-        eprintln!("invalid thread number: {}", n);
-        std::process::exit(1);
+fn print_threads(store: &Threads, show_done: bool) {
+    let threads = store.list();
+    if threads.is_empty() {
+        println!("  no threads");
+        return;
     }
 
-    do_switch(&format!("witshe/{}", active[n - 1].name));
+    let alive = tmux::list_sessions();
+
+    for t in threads {
+        let is_done = matches!(t.status, ThreadStatus::Done);
+        if !show_done && is_done {
+            continue;
+        }
+
+        let session = format!("witshe/{}", t.name);
+        let is_alive = alive.contains(&session);
+
+        let icon = match (&t.status, is_alive) {
+            (ThreadStatus::Done, _) => "\x1b[90m✓\x1b[0m",
+            (_, true) => "\x1b[32m●\x1b[0m",
+            (_, false) => "\x1b[90m✗\x1b[0m",
+        };
+
+        let tag_str = t.tag.as_ref().map(|tg| format!(" \x1b[36m[{}]\x1b[0m", tg)).unwrap_or_default();
+        println!("  {} {}{}", icon, t.name, tag_str);
+        if let Some(ref desc) = t.desc {
+            println!("    {}", desc);
+        }
+    }
 }
 
 fn continue_last(store: &Threads) {
@@ -305,36 +317,5 @@ fn continue_last(store: &Threads) {
         do_switch(&format!("witshe/{}", t.name));
     } else {
         println!("no active sessions");
-    }
-}
-
-fn resume_interactive(store: &Threads) {
-    let alive = tmux::list_sessions();
-    let active: Vec<_> = store.list().iter()
-        .filter(|t| matches!(t.status, ThreadStatus::Active) && alive.contains(&format!("witshe/{}", t.name)))
-        .cloned()
-        .collect();
-
-    if active.is_empty() {
-        println!("no active sessions");
-        return;
-    }
-
-    println!("\x1b[1m  pick a thread:\x1b[0m\n");
-    for (i, t) in active.iter().enumerate() {
-        let tag_str = t.tag.as_ref().map(|tg| format!(" \x1b[36m[{}]\x1b[0m", tg)).unwrap_or_default();
-        println!("  {}) {}{}", i + 1, t.name, tag_str);
-    }
-    println!();
-
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() { return; }
-    let input = input.trim();
-    if input == "q" || input.is_empty() { return; }
-
-    if let Ok(n) = input.parse::<usize>() {
-        if n >= 1 && n <= active.len() {
-            do_switch(&format!("witshe/{}", active[n - 1].name));
-        }
     }
 }
