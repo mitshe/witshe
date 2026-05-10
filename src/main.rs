@@ -264,16 +264,20 @@ fn interactive(store: &mut Threads) {
 
     if let Some(result) = picker::pick("witshe", &items) {
         let thread = threads[result.index].clone();
+        let session = format!("witshe/{}", thread.name);
+
         if result.is_done {
             store.reopen(&thread.name);
-            let session = format!("witshe/{}", thread.name);
-            let _ = tmux::create_session(&session, &thread.worktree_path);
             store.save();
             println!("  reopened: {}", thread.name);
-            do_switch(&session);
-        } else {
-            do_switch(&format!("witshe/{}", thread.name));
         }
+
+        // Ensure session exists
+        if !alive.contains(&session) {
+            let _ = tmux::create_session(&session, &thread.worktree_path);
+        }
+
+        do_switch(&session);
     }
 }
 
