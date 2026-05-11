@@ -26,14 +26,34 @@ impl HookContext {
     }
 }
 
-fn hook_path(event: &str) -> Option<std::path::PathBuf> {
-    let dir = dirs::home_dir()?.join(".witshe").join("hooks");
-    let path = dir.join(event);
-    if path.exists() && is_executable(&path) {
-        Some(path)
-    } else {
-        None
+fn hook_paths(event: &str) -> Vec<std::path::PathBuf> {
+    let Some(dir) = dirs::home_dir().map(|h| h.join(".witshe").join("hooks")) else {
+        return Vec::new();
+    };
+
+    let mut paths = Vec::new();
+
+    // Single file: ~/.witshe/hooks/post-new
+    let single = dir.join(event);
+    if single.is_file() && is_executable(&single) {
+        paths.push(single);
     }
+
+    // Directory: ~/.witshe/hooks/post-new.d/*
+    let dir_path = dir.join(format!("{}.d", event));
+    if dir_path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&dir_path) {
+            let mut files: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && is_executable(p))
+                .collect();
+            files.sort();
+            paths.extend(files);
+        }
+    }
+
+    paths
 }
 
 fn is_executable(path: &std::path::Path) -> bool {
@@ -52,52 +72,51 @@ fn is_executable(path: &std::path::Path) -> bool {
 
 /// Run a post-* hook. Errors are warnings, never abort.
 pub fn run_post(ctx: &HookContext) {
-    let Some(path) = hook_path(&ctx.event) else { return };
+    for path in hook_paths(&ctx.event) {
+        let result = Command::new(&path)
+            .envs(ctx.env_vars())
+            .output();
 
-    let result = Command::new(&path)
-        .envs(ctx.env_vars())
-        .output();
-
-    match result {
-        Ok(output) => {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.is_empty() {
-                    eprintln!("  hook {}: {}", ctx.event, stderr.trim());
+        match result {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.is_empty() {
+                        eprintln!("  hook {}: {}", path.display(), stderr.trim());
+                    }
                 }
             }
-        }
-        Err(e) => {
-            eprintln!("  hook {}: {}", ctx.event, e);
+            Err(e) => {
+                eprintln!("  hook {}: {}", path.display(), e);
+            }
         }
     }
 }
 
-/// Run a pre-* hook. Returns Err if hook aborts (exit != 0).
+/// Run a pre-* hook. Returns Err if any hook aborts (exit != 0).
 pub fn run_pre(ctx: &HookContext) -> Result<(), String> {
-    let Some(path) = hook_path(&ctx.event) else { return Ok(()) };
+    for path in hook_paths(&ctx.event) {
+        let result = Command::new(&path)
+            .envs(ctx.env_vars())
+            .output();
 
-    let result = Command::new(&path)
-        .envs(ctx.env_vars())
-        .output();
-
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                Ok(())
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let msg = if !stderr.is_empty() {
-                    stderr.trim().to_string()
-                } else if !stdout.is_empty() {
-                    stdout.trim().to_string()
-                } else {
-                    "hook aborted".to_string()
-                };
-                Err(msg)
+        match result {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let msg = if !stderr.is_empty() {
+                        stderr.trim().to_string()
+                    } else if !stdout.is_empty() {
+                        stdout.trim().to_string()
+                    } else {
+                        "hook aborted".to_string()
+                    };
+                    return Err(msg);
+                }
             }
+            Err(e) => return Err(e.to_string()),
         }
-        Err(e) => Err(e.to_string()),
     }
+    Ok(())
 }
