@@ -81,6 +81,19 @@ Useful when working with Docker bind mounts — place worktrees inside the mount
 
 Convention: if a `.worktrees/` directory exists in the repo's parent directory, witshe will use it automatically (no env var needed).
 
+### Copying files to new worktrees
+
+Git worktrees don't include untracked files like `.env`. By default witshe copies `.env` and `.env.local` from your repo to each new worktree.
+
+To customize, create `.witshe.copy` in your repo root:
+
+```
+.env
+.env.local
+docker-compose.override.yml
+config/local.php
+```
+
 ## How it works
 
 `witshe new feat/login` does three things:

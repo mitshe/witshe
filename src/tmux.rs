@@ -83,7 +83,40 @@ pub fn create_worktree(repo_path: &str, branch_name: &str, thread_name: &str) ->
         }
     }
 
+    // Copy untracked files to new worktree
+    copy_untracked(repo_path, &wt_str);
+
     Ok(wt_str)
+}
+
+fn copy_untracked(repo_path: &str, worktree_path: &str) {
+    let repo = std::path::Path::new(repo_path);
+    let wt = std::path::Path::new(worktree_path);
+
+    // Read .witshe.copy from repo root, or use default patterns
+    let copy_file = repo.join(".witshe.copy");
+    let patterns: Vec<String> = if copy_file.exists() {
+        std::fs::read_to_string(&copy_file)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect()
+    } else {
+        // Default: copy .env files
+        vec![".env".to_string(), ".env.local".to_string()]
+    };
+
+    for pattern in &patterns {
+        let src = repo.join(pattern);
+        if src.exists() && src.is_file() {
+            let dst = wt.join(pattern);
+            if let Some(parent) = dst.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
 }
 
 pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
