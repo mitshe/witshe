@@ -1,8 +1,10 @@
+mod hooks;
 mod picker;
 mod threads;
 mod tmux;
 
 use clap::{Parser, Subcommand};
+use hooks::HookContext;
 use threads::{Repo, ThreadStatus, Threads};
 
 #[derive(Parser)]
@@ -133,6 +135,17 @@ fn main() {
                 });
             }
 
+            let first_repo = thread.repos.first();
+            hooks::run_post(&HookContext {
+                event: "post-new".into(),
+                thread_name: name.clone(),
+                thread_tag: thread.tag.clone().unwrap_or_default(),
+                thread_desc: thread.desc.clone().unwrap_or_default(),
+                repo_path: first_repo.map(|r| r.repo_path.clone()).unwrap_or_default(),
+                worktree_path: first_repo.map(|r| r.worktree_path.clone()).unwrap_or_default(),
+                branch: first_repo.map(|r| r.branch.clone()).unwrap_or_default(),
+            });
+
             store.add(thread);
             store.save();
             println!("  created: {}", name);
@@ -166,13 +179,27 @@ fn main() {
             }
 
             if let Some(t) = store.get_mut(&thread_name) {
+                let tag = t.tag.clone().unwrap_or_default();
+                let desc = t.desc.clone().unwrap_or_default();
+
                 t.add_repo(Repo {
-                    repo_path,
-                    worktree_path: wt_path,
-                    branch,
+                    repo_path: repo_path.clone(),
+                    worktree_path: wt_path.clone(),
+                    branch: branch.clone(),
                     has_worktree: true,
                 });
                 store.save();
+
+                hooks::run_post(&HookContext {
+                    event: "post-add".into(),
+                    thread_name: thread_name.clone(),
+                    thread_tag: tag,
+                    thread_desc: desc,
+                    repo_path,
+                    worktree_path: wt_path,
+                    branch,
+                });
+
                 println!("  added: {} -> {}", repo_basename, thread_name);
             } else {
                 eprintln!("thread not found: {}", thread_name);
@@ -187,11 +214,17 @@ fn main() {
         Commands::Done { name } => {
             let name = resolve_thread(name);
 
+            let ctx = make_hook_ctx("", &name, &store);
+
+            if let Err(msg) = hooks::run_pre(&HookContext { event: "pre-done".into(), ..ctx.clone() }) {
+                eprintln!("  aborted by hook: {}", msg);
+                std::process::exit(1);
+            }
+
             if store.mark_done(&name) {
                 store.save();
                 println!("  done: {}", name);
-                // Kill session AFTER saving — otherwise running inside
-                // the session kills our own process before save completes
+                hooks::run_post(&HookContext { event: "post-done".into(), ..ctx });
                 let _ = tmux::kill_session(&format!("witshe/{}", name));
             } else {
                 eprintln!("thread not found: {}", name);
@@ -266,6 +299,18 @@ fn main() {
 
                 let count = done_threads.len();
                 for t in &done_threads {
+                    let ctx = HookContext {
+                        event: "pre-rm".into(),
+                        thread_name: t.name.clone(),
+                        thread_tag: t.tag.clone().unwrap_or_default(),
+                        thread_desc: t.desc.clone().unwrap_or_default(),
+                        repo_path: t.repos.first().map(|r| r.repo_path.clone()).unwrap_or_default(),
+                        worktree_path: t.repos.first().map(|r| r.worktree_path.clone()).unwrap_or_default(),
+                        branch: t.repos.first().map(|r| r.branch.clone()).unwrap_or_default(),
+                    };
+                    // pre-rm can't abort bulk delete
+                    let _ = hooks::run_pre(&ctx);
+
                     if !keep_worktree {
                         for repo in &t.repos {
                             if repo.has_worktree {
@@ -274,6 +319,7 @@ fn main() {
                         }
                     }
                     store.remove(&t.name);
+                    hooks::run_post(&HookContext { event: "post-rm".into(), ..ctx });
                 }
                 store.save();
                 println!("  removed {} done thread(s)", count);
@@ -282,6 +328,13 @@ fn main() {
                     eprintln!("usage: witshe rm <name> or witshe rm --done");
                     std::process::exit(1);
                 });
+
+                let ctx = make_hook_ctx("", &name, &store);
+
+                if let Err(msg) = hooks::run_pre(&HookContext { event: "pre-rm".into(), ..ctx.clone() }) {
+                    eprintln!("  aborted by hook: {}", msg);
+                    std::process::exit(1);
+                }
 
                 let _ = tmux::kill_session(&format!("witshe/{}", name));
 
@@ -297,9 +350,24 @@ fn main() {
 
                 store.remove(&name);
                 store.save();
+                hooks::run_post(&HookContext { event: "post-rm".into(), ..ctx });
                 println!("  removed: {}", name);
             }
         }
+    }
+}
+
+fn make_hook_ctx(event: &str, thread_name: &str, store: &Threads) -> HookContext {
+    let t = store.get(thread_name);
+    let first_repo = t.and_then(|t| t.repos.first());
+    HookContext {
+        event: event.to_string(),
+        thread_name: thread_name.to_string(),
+        thread_tag: t.and_then(|t| t.tag.clone()).unwrap_or_default(),
+        thread_desc: t.and_then(|t| t.desc.clone()).unwrap_or_default(),
+        repo_path: first_repo.map(|r| r.repo_path.clone()).unwrap_or_default(),
+        worktree_path: first_repo.map(|r| r.worktree_path.clone()).unwrap_or_default(),
+        branch: first_repo.map(|r| r.branch.clone()).unwrap_or_default(),
     }
 }
 

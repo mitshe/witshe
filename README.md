@@ -110,6 +110,35 @@ Make sure `witshe` is in your PATH. If installed with cargo, you may need the fu
 bind T display-popup -E "$HOME/.cargo/bin/witshe"
 ```
 
+## Hooks
+
+Executable scripts in `~/.witshe/hooks/` run automatically at key moments:
+
+| Hook | When | Abort on fail? |
+|------|------|----------------|
+| `post-new` | After thread created | No |
+| `post-add` | After repo added to thread | No |
+| `pre-done` | Before marking done | Yes |
+| `post-done` | After marking done | No |
+| `pre-rm` | Before removing thread | Yes |
+| `post-rm` | After removing thread | No |
+
+Hooks receive context via environment variables:
+
+```
+WITSHE_EVENT, WITSHE_THREAD_NAME, WITSHE_THREAD_TAG,
+WITSHE_THREAD_DESC, WITSHE_REPO_PATH, WITSHE_WORKTREE_PATH, WITSHE_BRANCH
+```
+
+Example `~/.witshe/hooks/post-new`:
+
+```bash
+#!/bin/bash
+echo "[$(date)] Created: $WITSHE_THREAD_NAME (tag=$WITSHE_THREAD_TAG)" >> /tmp/witshe.log
+```
+
+Don't forget `chmod +x`. Non-executable hooks are silently ignored.
+
 ## How it works
 
 `witshe new feat/login` does three things:
