@@ -8,7 +8,7 @@ use hooks::HookContext;
 use threads::{Repo, ThreadStatus, Threads};
 
 #[derive(Parser)]
-#[command(name = "witshe", about = "tmux + git worktrees = threads")]
+#[command(name = "witshe", about = "tmux + git worktrees = threads", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
