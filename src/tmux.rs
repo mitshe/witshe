@@ -204,6 +204,62 @@ pub fn attach(session_name: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn capture_last_lines(session_name: &str, n: u32) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-t", session_name, "-p", "-l", &n.to_string()])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    } else {
+        None
+    }
+}
+
+pub struct SessionStatus {
+    pub last_line: String,
+    pub needs_attention: bool,
+}
+
+const ATTENTION_PATTERNS: &[&str] = &[
+    "do you want",
+    "y/n",
+    "yes/no",
+    "(y)",
+    "proceed?",
+    "continue?",
+    "confirm",
+    "approve",
+    "allow",
+    "deny",
+    "press enter",
+    "waiting for",
+];
+
+pub fn get_session_status(session_name: &str) -> Option<SessionStatus> {
+    let text = capture_last_lines(session_name, 5)?;
+    let lines: Vec<&str> = text.lines().collect();
+    let last_line = lines.last()?.trim().to_string();
+    if last_line.is_empty() { return None; }
+
+    let lower = text.to_lowercase();
+    let needs_attention = ATTENTION_PATTERNS.iter().any(|p| lower.contains(p));
+
+    // Truncate for display
+    let display = if last_line.len() > 50 {
+        format!("{}…", &last_line[..50])
+    } else {
+        last_line
+    };
+
+    Some(SessionStatus {
+        last_line: display,
+        needs_attention,
+    })
+}
+
 pub fn list_sessions() -> Vec<String> {
     let output = Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])

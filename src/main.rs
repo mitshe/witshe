@@ -337,13 +337,32 @@ fn interactive(store: &mut Threads) {
         let session = format!("witshe/{}", t.name);
         let is_alive = alive.contains(&session);
         let is_done = matches!(t.status, ThreadStatus::Done);
-        let icon = if is_done { "✓" } else if is_alive { "●" } else { "✗" };
+
+        let status = if is_alive { tmux::get_session_status(&session) } else { None };
+        let needs_attention = status.as_ref().map(|s| s.needs_attention).unwrap_or(false);
+
+        let icon = if is_done {
+            "✓"
+        } else if needs_attention {
+            "⚠"
+        } else if is_alive {
+            "●"
+        } else {
+            "✗"
+        };
 
         let repo_count = t.repos.len();
         let repos_hint = if repo_count > 1 {
             format!(" ({} repos)", repo_count)
         } else {
             String::new()
+        };
+
+        let desc = match (&t.desc, &status) {
+            (Some(d), Some(s)) => Some(format!("{} │ {}", d, s.last_line)),
+            (Some(d), None) => Some(d.clone()),
+            (None, Some(s)) => Some(s.last_line.clone()),
+            (None, None) => None,
         };
 
         picker::PickerItem {
@@ -353,7 +372,7 @@ fn interactive(store: &mut Threads) {
                 t.tag.as_ref().map(|tg| format!("[{}]", tg)).unwrap_or_default(),
                 repos_hint,
             ),
-            desc: t.desc.clone(),
+            desc,
             is_done,
         }
     }).collect();
