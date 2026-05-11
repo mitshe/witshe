@@ -112,32 +112,9 @@ bind T display-popup -E "$HOME/.cargo/bin/witshe"
 
 ## Hooks
 
-Executable scripts in `~/.witshe/hooks/` run automatically at key moments:
+Shell scripts in `~/.witshe/hooks/` run automatically during thread lifecycle. Continue-on-error — a failing post-hook warns but never breaks witshe.
 
-| Hook | When | Abort on fail? |
-|------|------|----------------|
-| `post-new` | After thread created | No |
-| `post-add` | After repo added to thread | No |
-| `pre-done` | Before marking done | Yes |
-| `post-done` | After marking done | No |
-| `pre-rm` | Before removing thread | Yes |
-| `post-rm` | After removing thread | No |
-
-Hooks receive context via environment variables:
-
-```
-WITSHE_EVENT, WITSHE_THREAD_NAME, WITSHE_THREAD_TAG,
-WITSHE_THREAD_DESC, WITSHE_REPO_PATH, WITSHE_WORKTREE_PATH, WITSHE_BRANCH
-```
-
-Example `~/.witshe/hooks/post-new`:
-
-```bash
-#!/bin/bash
-echo "[$(date)] Created: $WITSHE_THREAD_NAME (tag=$WITSHE_THREAD_TAG)" >> /tmp/witshe.log
-```
-
-Don't forget `chmod +x`. Non-executable hooks are silently ignored.
+See **[HOOKS.md](HOOKS.md)** for full documentation, all events, env vars, and examples.
 
 ## How it works
 
