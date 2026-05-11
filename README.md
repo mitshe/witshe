@@ -13,6 +13,12 @@ tar xzf witshe-*.tar.gz
 sudo mv witshe /usr/local/bin/
 ```
 
+On macOS you may need to remove the quarantine flag:
+
+```bash
+xattr -d com.apple.quarantine /usr/local/bin/witshe
+```
+
 Or build from source: `cargo install --git https://github.com/mitshe/witshe`
 
 Requires: `tmux` and `git`
