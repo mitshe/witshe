@@ -93,9 +93,11 @@ pub fn pick(title: &str, items: &[PickerItem]) -> Option<PickResult> {
 
 fn filter(items: &[PickerItem], search: &str, show_done: bool) -> Vec<usize> {
     let q = search.to_lowercase();
+    let search_all = !q.is_empty(); // search ignores tabs
+
     items.iter().enumerate()
         .filter(|(_, it)| {
-            if show_done != it.is_done { return false; }
+            if !search_all && show_done != it.is_done { return false; }
             if q.is_empty() { return true; }
             it.label.to_lowercase().contains(&q)
                 || it.hint.to_lowercase().contains(&q)
