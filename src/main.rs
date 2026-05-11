@@ -186,11 +186,13 @@ fn main() {
 
         Commands::Done { name } => {
             let name = resolve_thread(name);
-            let _ = tmux::kill_session(&format!("witshe/{}", name));
 
             if store.mark_done(&name) {
                 store.save();
                 println!("  done: {}", name);
+                // Kill session AFTER saving — otherwise running inside
+                // the session kills our own process before save completes
+                let _ = tmux::kill_session(&format!("witshe/{}", name));
             } else {
                 eprintln!("thread not found: {}", name);
                 std::process::exit(1);
