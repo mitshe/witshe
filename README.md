@@ -67,6 +67,20 @@ witshe rm <name>        delete permanently
 witshe -c               jump to last session
 ```
 
+## Configuration
+
+### Custom worktree location
+
+By default worktrees are created in `~/.witshe/worktrees/<thread>/<repo>/`. To change this:
+
+```bash
+export WITSHE_WORKTREE_ROOT=~/my/custom/path
+```
+
+Useful when working with Docker bind mounts — place worktrees inside the mounted directory so containers can see them.
+
+Convention: if a `.worktrees/` directory exists in the repo's parent directory, witshe will use it automatically (no env var needed).
+
 ## How it works
 
 `witshe new feat/login` does three things:

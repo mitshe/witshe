@@ -20,14 +20,40 @@ pub fn current_thread() -> Option<String> {
     current_session().and_then(|s| s.strip_prefix("witshe/").map(|n| n.to_string()))
 }
 
-pub fn create_worktree(repo_path: &str, branch_name: &str, thread_name: &str) -> Result<String, String> {
+fn resolve_worktree_root(repo_path: &str) -> Result<std::path::PathBuf, String> {
+    // 1. WITSHE_WORKTREE_ROOT env var (with tilde expansion)
+    if let Ok(val) = std::env::var("WITSHE_WORKTREE_ROOT") {
+        let expanded = if val.starts_with("~/") {
+            let home = dirs::home_dir().ok_or("no home dir")?;
+            home.join(&val[2..])
+        } else {
+            std::path::PathBuf::from(&val)
+        };
+        return Ok(expanded);
+    }
+
+    // 2. Convention: .worktrees/ in repo's parent dir
+    let repo = std::path::Path::new(repo_path);
+    if let Some(parent) = repo.parent() {
+        let convention = parent.join(".worktrees");
+        if convention.is_dir() {
+            return Ok(convention);
+        }
+    }
+
+    // 3. Default
     let home = dirs::home_dir().ok_or("no home dir")?;
+    Ok(home.join(".witshe").join("worktrees"))
+}
+
+pub fn create_worktree(repo_path: &str, branch_name: &str, thread_name: &str) -> Result<String, String> {
+    let root = resolve_worktree_root(repo_path)?;
     let repo_basename = std::path::Path::new(repo_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "repo".to_string());
 
-    let wt_dir = home.join(".witshe").join("worktrees").join(thread_name);
+    let wt_dir = root.join(thread_name);
     std::fs::create_dir_all(&wt_dir).map_err(|e| e.to_string())?;
 
     let wt_path = wt_dir.join(&repo_basename);
