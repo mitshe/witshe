@@ -20,12 +20,17 @@ pub fn current_thread() -> Option<String> {
     current_session().and_then(|s| s.strip_prefix("witshe/").map(|n| n.to_string()))
 }
 
-pub fn create_worktree(repo_path: &str, branch_name: &str) -> Result<String, String> {
+pub fn create_worktree(repo_path: &str, branch_name: &str, thread_name: &str) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
-    let wt_dir = home.join(".witshe").join("worktrees");
+    let repo_basename = std::path::Path::new(repo_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+
+    let wt_dir = home.join(".witshe").join("worktrees").join(thread_name);
     std::fs::create_dir_all(&wt_dir).map_err(|e| e.to_string())?;
 
-    let wt_path = wt_dir.join(branch_name);
+    let wt_path = wt_dir.join(&repo_basename);
     let wt_str = wt_path.to_string_lossy().to_string();
 
     let output = Command::new("git")
@@ -71,6 +76,18 @@ pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), Strin
 pub fn create_session(session_name: &str, cwd: &str) -> Result<(), String> {
     let output = Command::new("tmux")
         .args(["new-session", "-d", "-s", session_name, "-c", cwd])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+pub fn add_window(session_name: &str, window_name: &str, cwd: &str) -> Result<(), String> {
+    let output = Command::new("tmux")
+        .args(["new-window", "-t", session_name, "-n", window_name, "-c", cwd])
         .output()
         .map_err(|e| e.to_string())?;
 

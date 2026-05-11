@@ -41,6 +41,12 @@ witshe set --tag bugfix                          # edit current thread
 witshe reopen feat/login                         # bring back a done thread
 witshe ls                                        # list (non-interactive)
 witshe rm feat/old                               # delete permanently
+
+# Multi-repo threads (epics)
+witshe new auth-rewrite --no-worktree --tag epik
+witshe add ~/projects/frontend --branch feat/auth
+witshe add ~/projects/backend --branch feat/auth
+# → 1 thread, 1 tmux session, 2 windows (Ctrl+B N to switch)
 ```
 
 ## How it works

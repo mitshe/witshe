@@ -3,7 +3,7 @@ mod threads;
 mod tmux;
 
 use clap::{Parser, Subcommand};
-use threads::{ThreadStatus, Threads};
+use threads::{Repo, ThreadStatus, Threads};
 
 #[derive(Parser)]
 #[command(name = "witshe", about = "tmux + git worktrees = threads")]
@@ -30,6 +30,17 @@ enum Commands {
         #[arg(short, long)]
         desc: Option<String>,
     },
+    /// Add a repo to current thread (creates worktree + tmux window)
+    Add {
+        /// Path to the repo
+        repo: String,
+        /// Branch name
+        #[arg(short, long)]
+        branch: String,
+        /// Thread to add to (auto-detects if inside witshe session)
+        #[arg(short, long)]
+        thread: Option<String>,
+    },
     /// List threads (non-interactive)
     Ls {
         #[arg(short, long)]
@@ -51,7 +62,6 @@ enum Commands {
         tag: Option<String>,
         #[arg(long)]
         desc: Option<String>,
-        /// Which thread to edit (auto-detects if inside witshe session)
         #[arg(short, long)]
         thread: Option<String>,
     },
@@ -60,7 +70,6 @@ enum Commands {
         name: Option<String>,
         #[arg(long)]
         keep_worktree: bool,
-        /// Remove all done threads
         #[arg(long)]
         done: bool,
     },
@@ -84,35 +93,91 @@ fn main() {
 
     match command {
         Commands::New { name, repo, no_worktree, tag, desc } => {
-            let repo_path = repo.unwrap_or_else(|| {
-                std::env::current_dir().unwrap().to_string_lossy().to_string()
-            });
+            let mut thread = threads::Thread::new(name.clone(), tag, desc);
 
-            let worktree_path = if no_worktree {
-                repo_path.clone()
+            if no_worktree {
+                let cwd = repo.unwrap_or_else(|| {
+                    std::env::current_dir().unwrap().to_string_lossy().to_string()
+                });
+                thread.cwd = Some(cwd.clone());
+
+                let session = format!("witshe/{}", name);
+                if let Err(e) = tmux::create_session(&session, &cwd) {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
             } else {
-                match tmux::create_worktree(&repo_path, &name) {
+                let repo_path = repo.unwrap_or_else(|| {
+                    std::env::current_dir().unwrap().to_string_lossy().to_string()
+                });
+
+                let wt_path = match tmux::create_worktree(&repo_path, &name, &name) {
                     Ok(path) => path,
                     Err(e) => {
                         eprintln!("error: {}", e);
                         std::process::exit(1);
                     }
+                };
+
+                let session = format!("witshe/{}", name);
+                if let Err(e) = tmux::create_session(&session, &wt_path) {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+
+                thread.add_repo(Repo {
+                    repo_path,
+                    worktree_path: wt_path,
+                    branch: name.clone(),
+                    has_worktree: true,
+                });
+            }
+
+            store.add(thread);
+            store.save();
+            println!("  created: {}", name);
+        }
+
+        Commands::Add { repo, branch, thread } => {
+            let thread_name = resolve_thread(thread);
+
+            let repo_path = std::fs::canonicalize(&repo)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(repo);
+
+            let wt_path = match tmux::create_worktree(&repo_path, &branch, &thread_name) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
                 }
             };
 
-            let session_name = format!("witshe/{}", name);
-            if let Err(e) = tmux::create_session(&session_name, &worktree_path) {
-                eprintln!("error: {}", e);
-                std::process::exit(1);
+            let repo_basename = std::path::Path::new(&repo_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| branch.clone());
+
+            // Add tmux window
+            let session = format!("witshe/{}", thread_name);
+            let alive = tmux::list_sessions();
+            if alive.contains(&session) {
+                let _ = tmux::add_window(&session, &repo_basename, &wt_path);
             }
 
-            let thread = threads::Thread::new(
-                name.clone(), repo_path, worktree_path, !no_worktree, tag, desc,
-            );
-            store.add(thread);
-            store.save();
-
-            println!("  created: {}", name);
+            if let Some(t) = store.get_mut(&thread_name) {
+                t.add_repo(Repo {
+                    repo_path,
+                    worktree_path: wt_path,
+                    branch,
+                    has_worktree: true,
+                });
+                store.save();
+                println!("  added: {} -> {}", repo_basename, thread_name);
+            } else {
+                eprintln!("thread not found: {}", thread_name);
+                std::process::exit(1);
+            }
         }
 
         Commands::Ls { all } => {
@@ -134,10 +199,20 @@ fn main() {
 
         Commands::Reopen { name } => {
             if store.reopen(&name) {
-                // Re-create tmux session if thread has worktree
                 if let Some(t) = store.get(&name) {
-                    let session_name = format!("witshe/{}", name);
-                    let _ = tmux::create_session(&session_name, &t.worktree_path);
+                    let session = format!("witshe/{}", name);
+                    let cwd = t.first_cwd().unwrap_or_else(|| ".".to_string());
+                    let _ = tmux::create_session(&session, &cwd);
+
+                    // Re-create windows for additional repos
+                    for (i, repo) in t.repos.iter().enumerate() {
+                        if i == 0 { continue; } // first repo is the session's initial window
+                        let basename = std::path::Path::new(&repo.repo_path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| repo.branch.clone());
+                        let _ = tmux::add_window(&session, &basename, &repo.worktree_path);
+                    }
                 }
                 store.save();
                 println!("  reopened: {}", name);
@@ -189,8 +264,12 @@ fn main() {
 
                 let count = done_threads.len();
                 for t in &done_threads {
-                    if t.has_worktree && !keep_worktree {
-                        let _ = tmux::remove_worktree(&t.repo_path, &t.worktree_path);
+                    if !keep_worktree {
+                        for repo in &t.repos {
+                            if repo.has_worktree {
+                                let _ = tmux::remove_worktree(&repo.repo_path, &repo.worktree_path);
+                            }
+                        }
                     }
                     store.remove(&t.name);
                 }
@@ -205,8 +284,12 @@ fn main() {
                 let _ = tmux::kill_session(&format!("witshe/{}", name));
 
                 if let Some(thread) = store.get(&name) {
-                    if thread.has_worktree && !keep_worktree {
-                        let _ = tmux::remove_worktree(&thread.repo_path, &thread.worktree_path);
+                    if !keep_worktree {
+                        for repo in &thread.repos {
+                            if repo.has_worktree {
+                                let _ = tmux::remove_worktree(&repo.repo_path, &repo.worktree_path);
+                            }
+                        }
                     }
                 }
 
@@ -254,9 +337,20 @@ fn interactive(store: &mut Threads) {
         let is_done = matches!(t.status, ThreadStatus::Done);
         let icon = if is_done { "✓" } else if is_alive { "●" } else { "✗" };
 
+        let repo_count = t.repos.len();
+        let repos_hint = if repo_count > 1 {
+            format!(" ({} repos)", repo_count)
+        } else {
+            String::new()
+        };
+
         picker::PickerItem {
             label: format!("{} {}", icon, t.name),
-            hint: t.tag.as_ref().map(|tg| format!("[{}]", tg)).unwrap_or_default(),
+            hint: format!(
+                "{}{}",
+                t.tag.as_ref().map(|tg| format!("[{}]", tg)).unwrap_or_default(),
+                repos_hint,
+            ),
             desc: t.desc.clone(),
             is_done,
         }
@@ -274,7 +368,18 @@ fn interactive(store: &mut Threads) {
 
         // Ensure session exists
         if !alive.contains(&session) {
-            let _ = tmux::create_session(&session, &thread.worktree_path);
+            let cwd = thread.first_cwd().unwrap_or_else(|| ".".to_string());
+            let _ = tmux::create_session(&session, &cwd);
+
+            // Re-create windows for additional repos
+            for (i, repo) in thread.repos.iter().enumerate() {
+                if i == 0 { continue; }
+                let basename = std::path::Path::new(&repo.repo_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| repo.branch.clone());
+                let _ = tmux::add_window(&session, &basename, &repo.worktree_path);
+            }
         }
 
         do_switch(&session);
@@ -306,7 +411,12 @@ fn print_threads(store: &Threads, show_done: bool) {
         };
 
         let tag_str = t.tag.as_ref().map(|tg| format!(" \x1b[36m[{}]\x1b[0m", tg)).unwrap_or_default();
-        println!("  {} {}{}", icon, t.name, tag_str);
+        let repo_str = if t.repos.len() > 1 {
+            format!(" \x1b[90m({} repos)\x1b[0m", t.repos.len())
+        } else {
+            String::new()
+        };
+        println!("  {} {}{}{}", icon, t.name, tag_str, repo_str);
         if let Some(ref desc) = t.desc {
             println!("    {}", desc);
         }

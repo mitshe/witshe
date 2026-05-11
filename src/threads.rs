@@ -10,6 +10,14 @@ pub enum ThreadStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Repo {
+    pub repo_path: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub has_worktree: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thread {
     pub id: String,
     pub name: String,
@@ -17,14 +25,21 @@ pub struct Thread {
     pub tag: Option<String>,
     pub desc: Option<String>,
     pub status: ThreadStatus,
-    pub repo_path: String,
-    pub worktree_path: String,
-    pub has_worktree: bool,
+    pub repos: Vec<Repo>,
+    pub cwd: Option<String>,
     pub created_at: String,
+
+    // Legacy fields for migration
+    #[serde(skip_serializing, default)]
+    repo_path: Option<String>,
+    #[serde(skip_serializing, default)]
+    worktree_path: Option<String>,
+    #[serde(skip_serializing, default)]
+    has_worktree: Option<bool>,
 }
 
 impl Thread {
-    pub fn new(name: String, repo_path: String, worktree_path: String, has_worktree: bool, tag: Option<String>, desc: Option<String>) -> Self {
+    pub fn new(name: String, tag: Option<String>, desc: Option<String>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name,
@@ -32,11 +47,40 @@ impl Thread {
             tag,
             desc,
             status: ThreadStatus::Active,
-            repo_path,
-            worktree_path,
-            has_worktree,
+            repos: Vec::new(),
+            cwd: None,
             created_at: Utc::now().to_rfc3339(),
+            repo_path: None,
+            worktree_path: None,
+            has_worktree: None,
         }
+    }
+
+    pub fn add_repo(&mut self, repo: Repo) {
+        self.repos.push(repo);
+    }
+
+    /// Migrate legacy single-repo format to new repos vec
+    fn migrate(&mut self) {
+        if self.repos.is_empty() {
+            if let (Some(rp), Some(wp)) = (self.repo_path.take(), self.worktree_path.take()) {
+                let hw = self.has_worktree.take().unwrap_or(true);
+                self.repos.push(Repo {
+                    repo_path: rp,
+                    worktree_path: wp.clone(),
+                    branch: self.name.clone(),
+                    has_worktree: hw,
+                });
+                if self.cwd.is_none() {
+                    self.cwd = Some(wp);
+                }
+            }
+        }
+    }
+
+    pub fn first_cwd(&self) -> Option<String> {
+        self.cwd.clone()
+            .or_else(|| self.repos.first().map(|r| r.worktree_path.clone()))
     }
 }
 
@@ -53,13 +97,27 @@ impl Threads {
 
     pub fn load() -> Self {
         let path = Self::file_path();
-        let threads = if path.exists() {
+        let mut threads: Vec<Thread> = if path.exists() {
             let content = fs::read_to_string(&path).unwrap_or_default();
             serde_json::from_str(&content).unwrap_or_default()
         } else {
             Vec::new()
         };
-        Self { threads }
+
+        // Migrate legacy format
+        let mut migrated = false;
+        for t in &mut threads {
+            if t.repo_path.is_some() || t.worktree_path.is_some() {
+                t.migrate();
+                migrated = true;
+            }
+        }
+
+        let store = Self { threads };
+        if migrated {
+            store.save();
+        }
+        store
     }
 
     pub fn save(&self) {
@@ -78,6 +136,10 @@ impl Threads {
 
     pub fn get(&self, name: &str) -> Option<&Thread> {
         self.threads.iter().find(|t| t.name == name)
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Thread> {
+        self.threads.iter_mut().find(|t| t.name == name)
     }
 
     pub fn mark_done(&mut self, name: &str) -> bool {
