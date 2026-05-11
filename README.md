@@ -94,6 +94,22 @@ docker-compose.override.yml
 config/local.php
 ```
 
+### tmux keybind
+
+Add to `~/.tmux.conf` for a picker popup on `Ctrl+B T`:
+
+```
+bind T display-popup -E "witshe"
+```
+
+Then reload: `tmux source-file ~/.tmux.conf`
+
+Make sure `witshe` is in your PATH. If installed with cargo, you may need the full path:
+
+```
+bind T display-popup -E "$HOME/.cargo/bin/witshe"
+```
+
 ## How it works
 
 `witshe new feat/login` does three things:
